@@ -21,6 +21,13 @@ def log(msg):
 
 
 def detect_iface():
+    """Detect the main network interface.
+    Priority:
+      1. Default route interface (most accurate)
+      2. Common names: eth0, ens3, ens33, enp0s3, net0, ...
+      3. First non-loopback interface that has statistics
+    """
+    # 1. Default route
     try:
         out = subprocess.check_output(
             ["ip", "route", "show", "default"],
@@ -29,18 +36,33 @@ def detect_iface():
             timeout=5,
         )
         parts = out.split()
-        idx = parts.index("dev")
-        return parts[idx + 1]
+        if "dev" in parts:
+            iface = parts[parts.index("dev") + 1]
+            if os.path.exists(f"/sys/class/net/{iface}/statistics"):
+                return iface
     except Exception as e:
-        log(f"failed to detect default interface: {e}")
-        # fallback: first non-loopback interface
-        try:
-            for name in os.listdir("/sys/class/net"):
-                if name != "lo" and os.path.exists(f"/sys/class/net/{name}/statistics"):
-                    return name
-        except Exception:
-            pass
-        raise RuntimeError("could not detect network interface")
+        log(f"default route detection failed: {e}")
+
+    # 2. Prefer common interface names
+    preferred = [
+        "eth0", "ens3", "ens33", "ens18", "enp0s3", "enp1s0",
+        "net0", "eno1", "em1", "bond0"
+    ]
+    for name in preferred:
+        if os.path.exists(f"/sys/class/net/{name}/statistics"):
+            return name
+
+    # 3. First non-loopback interface
+    try:
+        for name in sorted(os.listdir("/sys/class/net")):
+            if name == "lo":
+                continue
+            if os.path.exists(f"/sys/class/net/{name}/statistics"):
+                return name
+    except Exception:
+        pass
+
+    raise RuntimeError("could not detect network interface")
 
 
 def read_bytes(iface):
