@@ -2,7 +2,7 @@
 set -e
 
 # TODO: replace USERNAME/REPO with your own repo
-REPO_RAW="https://raw.githubusercontent.com/mhmdh94/REPO/main"
+REPO_RAW="https://raw.githubusercontent.com/mhmdh94/trafficmonitor/main"
 
 INSTALL_DIR="/opt/traffic-monitor"
 ENV_FILE="/etc/traffic-monitor.env"
