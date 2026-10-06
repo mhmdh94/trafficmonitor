@@ -7,7 +7,7 @@
 روی هر سرور این دستور را بزنید و به سؤال‌ها جواب بدهید:
 
 ```bash
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/mhmdh94/trafficmonitor/main/install.sh)
+curl -fsSL https://raw.githubusercontent.com/mhmdh94/trafficmonitor/main/install.sh | sudo bash
 ```
 
 مقادیری که پرسیده می‌شود: توکن ربات تلگرام، شناسه چت، اسم سرور، فاصله بررسی (ثانیه)، درصد افت برای هشدار، حداقل ترافیک برای مقایسه (مگابایت) و فاصله بین هشدارهای تکراری (ثانیه).
@@ -25,7 +25,7 @@ journalctl -u traffic-monitor -f
 ## حذف
 
 ```bash
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/mhmdh94/trafficmonitor/main/install.sh) --uninstall
+curl -fsSL https://raw.githubusercontent.com/mhmdh94/trafficmonitor/main/install.sh | sudo bash -s -- uninstall
 ```
 
 ## کارت شبکه
