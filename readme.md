@@ -7,7 +7,7 @@ Traffic Monitor
 روی هر سرور این دستور را بزنید و به سؤال‌ها جواب بدهید:
 
 bash
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/USERNAME/REPO/main/install.sh)
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/mhmdh94/REPO/main/install.sh)
 
 مقادیری که پرسیده می‌شود: توکن ربات تلگرام، شناسه چت، اسم سرور، فاصله بررسی (ثانیه)، درصد افت برای هشدار، حداقل ترافیک برای مقایسه (مگابایت) و فاصله بین هشدارهای تکراری (ثانیه).
 
@@ -20,7 +20,7 @@ bash
 journalctl -u traffic-monitor -f
 حذف
 bash
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/USERNAME/REPO/main/install.sh) --uninstall
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/USERNAME/mhmdh94/main/install.sh) --uninstall
 کارت شبکه
 
 کارت شبکه به‌صورت خودکار از مسیر پیش‌فرض تشخیص داده می‌شود. برای تعیین دستی، خط زیر را به فایل /etc/traffic-monitor.env اضافه کنید و سرویس را ری‌استارت کنید:
