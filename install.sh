@@ -1,9 +1,7 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# TODO: replace USERNAME/REPO with your own repo
 REPO_RAW="https://raw.githubusercontent.com/mhmdh94/trafficmonitor/main"
-
 INSTALL_DIR="/opt/traffic-monitor"
 ENV_FILE="/etc/traffic-monitor.env"
 SERVICE="traffic-monitor"
@@ -13,7 +11,7 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-if [ "$1" = "--uninstall" ]; then
+if [ "${1:-}" = "--uninstall" ]; then
   systemctl disable --now "$SERVICE" 2>/dev/null || true
   rm -f "/etc/systemd/system/$SERVICE.service" "$ENV_FILE"
   rm -rf "$INSTALL_DIR"
@@ -22,23 +20,25 @@ if [ "$1" = "--uninstall" ]; then
   exit 0
 fi
 
-# make sure curl and python3 exist
+# dependencies
 for pkg in curl python3; do
   if ! command -v "$pkg" >/dev/null 2>&1; then
     apt-get update -qq && apt-get install -y -qq "$pkg"
   fi
 done
 
-# keep previous values as defaults when re-running
+# keep previous values as defaults
 if [ -f "$ENV_FILE" ]; then
-  set -a; . "$ENV_FILE"; set +a
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
 fi
 
-# works both with: bash <(curl ...)  and  curl ... | bash
 if [ -t 0 ]; then TTY=/dev/stdin; else TTY=/dev/tty; fi
 
 ask() {
-  local var="$1" prompt="$2" def="$3" val
+  local var="$1" prompt="$2" def="${3:-}" val
   while true; do
     if [ -n "$def" ]; then
       read -r -p "$prompt [$def]: " val < "$TTY" || true
@@ -61,7 +61,7 @@ ask DROP_PERCENT "Alert when traffic drops by (%)"          "${DROP_PERCENT:-50}
 ask MIN_PREV_MB  "Min traffic per interval to compare (MB)" "${MIN_PREV_MB:-20}"
 ask COOLDOWN     "Seconds between repeated alerts"          "${COOLDOWN:-1800}"
 
-# validate the bot token
+# validate bot token
 if ! curl -fsS --max-time 15 "https://api.telegram.org/bot${TG_TOKEN}/getMe" >/dev/null; then
   echo "Telegram token is invalid or Telegram is unreachable from this server."
   exit 1
@@ -69,6 +69,7 @@ fi
 
 mkdir -p "$INSTALL_DIR"
 curl -fsSL "$REPO_RAW/monitor.py" -o "$INSTALL_DIR/monitor.py"
+chmod +x "$INSTALL_DIR/monitor.py"
 
 cat > "$ENV_FILE" << EOF
 TG_TOKEN="$TG_TOKEN"
@@ -88,10 +89,13 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+Type=simple
 EnvironmentFile=$ENV_FILE
 ExecStart=/usr/bin/python3 $INSTALL_DIR/monitor.py
 Restart=always
 RestartSec=10
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -102,10 +106,12 @@ systemctl enable "$SERVICE" >/dev/null 2>&1
 systemctl restart "$SERVICE"
 
 # test message
-curl -fsS --max-time 15 -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+if curl -fsS --max-time 15 -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
   --data-urlencode "chat_id=${TG_CHAT_ID}" \
-  --data-urlencode "text=✅ Traffic monitor installed on ${SERVER_NAME}" >/dev/null \
-  && echo "Test message sent to Telegram." \
-  || echo "Warning: could not send test message. Check chat id."
+  --data-urlencode "text=✅ Traffic monitor installed on ${SERVER_NAME}" >/dev/null; then
+  echo "Test message sent to Telegram."
+else
+  echo "Warning: could not send test message. Check chat id."
+fi
 
 echo "Done. Logs: journalctl -u $SERVICE -f"
