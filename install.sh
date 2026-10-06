@@ -6,6 +6,7 @@ INSTALL_DIR="/opt/traffic-monitor"
 ENV_FILE="/etc/traffic-monitor.env"
 SERVICE="traffic-monitor"
 SERVICE_FILE="/etc/systemd/system/${SERVICE}.service"
+BIN_LINK="/usr/local/bin/tm"
 
 # ---------- helpers ----------
 need_root() {
@@ -17,22 +18,25 @@ need_root() {
 
 usage() {
   cat << EOF
-Usage: $0 [command]
+Usage: tm [command]   or   bash install.sh [command]
 
 Commands:
-  (no args)     Install or reconfigure
-  start         Start the service
-  stop          Stop the service
-  restart       Restart the service
-  status        Show service status + last logs
-  edit          Edit config file (/etc/traffic-monitor.env)
-  uninstall     Remove everything
-  help          Show this help
+  (no args) / menu   Interactive management menu
+  install            Install or reconfigure
+  start              Start the service
+  stop               Stop the service
+  restart            Restart the service
+  status             Show status + last logs
+  logs               Follow live logs
+  edit               Edit config (/etc/traffic-monitor.env)
+  uninstall          Remove everything
+  help               Show this help
 
 Examples:
-  curl -fsSL .../install.sh | sudo bash
-  sudo bash install.sh start
-  sudo bash install.sh edit
+  curl -fsSL .../install.sh | sudo bash          # first install
+  sudo tm                                        # open menu
+  sudo tm start
+  sudo tm logs
 EOF
 }
 
@@ -40,20 +44,20 @@ EOF
 cmd_start() {
   need_root
   systemctl start "$SERVICE"
-  echo "Started."
+  echo "✅ Started."
   systemctl --no-pager -l status "$SERVICE" || true
 }
 
 cmd_stop() {
   need_root
   systemctl stop "$SERVICE"
-  echo "Stopped."
+  echo "⏹  Stopped."
 }
 
 cmd_restart() {
   need_root
   systemctl restart "$SERVICE"
-  echo "Restarted."
+  echo "🔄 Restarted."
   systemctl --no-pager -l status "$SERVICE" || true
 }
 
@@ -64,31 +68,86 @@ cmd_status() {
   journalctl -u "$SERVICE" -n 20 --no-pager || true
 }
 
+cmd_logs() {
+  echo "Following logs (Ctrl+C to exit)..."
+  journalctl -u "$SERVICE" -f
+}
+
 cmd_edit() {
   need_root
   if [ ! -f "$ENV_FILE" ]; then
     echo "Config file not found: $ENV_FILE"
-    echo "Run the installer first."
+    echo "Run install first."
     exit 1
   fi
   ${EDITOR:-nano} "$ENV_FILE"
   echo
-  read -r -p "Restart service to apply changes? [Y/n] " ans
+  read -r -p "Restart service to apply changes? [Y/n] " ans || true
   if [[ "${ans:-Y}" =~ ^[Yy]$ ]]; then
     systemctl restart "$SERVICE"
-    echo "Service restarted."
+    echo "✅ Service restarted."
   else
-    echo "Remember to restart later: systemctl restart $SERVICE"
+    echo "Remember to restart later: sudo tm restart"
   fi
 }
 
 cmd_uninstall() {
   need_root
   systemctl disable --now "$SERVICE" 2>/dev/null || true
-  rm -f "$SERVICE_FILE" "$ENV_FILE"
+  rm -f "$SERVICE_FILE" "$ENV_FILE" "$BIN_LINK"
   rm -rf "$INSTALL_DIR"
   systemctl daemon-reload
-  echo "Uninstalled."
+  echo "🗑  Uninstalled completely."
+}
+
+cmd_menu() {
+  need_root
+  while true; do
+    clear
+    echo "========================================"
+    echo "     Traffic Monitor - Management"
+    echo "========================================"
+    echo
+    systemctl is-active --quiet "$SERVICE" 2>/dev/null && \
+      echo "  Status:  🟢 Running" || echo "  Status:  🔴 Stopped"
+    if [ -f "$ENV_FILE" ]; then
+      # shellcheck disable=SC1090
+      source "$ENV_FILE" 2>/dev/null || true
+      echo "  Server:  ${SERVER_NAME:-?}"
+      echo "  Iface:   ${IFACE:-auto}"
+      echo "  Interval:${INTERVAL:-?}s | Drop: ${DROP_PERCENT:-?}%"
+    fi
+    echo
+    echo "  1) Status + last logs"
+    echo "  2) Live logs (follow)"
+    echo "  3) Start"
+    echo "  4) Stop"
+    echo "  5) Restart"
+    echo "  6) Edit config"
+    echo "  7) Reinstall / Reconfigure"
+    echo "  8) Uninstall"
+    echo "  0) Exit"
+    echo
+    read -r -p "Choose [0-8]: " choice || true
+    case "${choice:-}" in
+      1) cmd_status; read -r -p "Press Enter..." ;;
+      2) cmd_logs ;;
+      3) cmd_start; read -r -p "Press Enter..." ;;
+      4) cmd_stop; read -r -p "Press Enter..." ;;
+      5) cmd_restart; read -r -p "Press Enter..." ;;
+      6) cmd_edit; read -r -p "Press Enter..." ;;
+      7) cmd_install; read -r -p "Press Enter..." ;;
+      8)
+        read -r -p "Are you sure? Type 'yes' to uninstall: " conf
+        if [ "$conf" = "yes" ]; then
+          cmd_uninstall
+          exit 0
+        fi
+        ;;
+      0|q|Q) exit 0 ;;
+      *) echo "Invalid option"; sleep 1 ;;
+    esac
+  done
 }
 
 cmd_install() {
@@ -111,7 +170,8 @@ cmd_install() {
 
   if [ -t 0 ]; then TTY=/dev/stdin; else TTY=/dev/tty; fi
 
-  ask() {
+  # ask that REQUIRES a value
+  ask_required() {
     local var="$1" prompt="$2" def="${3:-}" val
     while true; do
       if [ -n "$def" ]; then
@@ -120,26 +180,39 @@ cmd_install() {
       else
         read -r -p "$prompt: " val < "$TTY" || true
       fi
-      [ -n "$val" ] && break
+      if [ -n "$val" ]; then
+        break
+      fi
       echo "This value is required."
     done
     printf -v "$var" '%s' "$val"
   }
 
-  echo "=== Traffic Monitor installer ==="
-  ask TG_TOKEN     "Telegram bot token"                       "${TG_TOKEN:-}"
-  ask TG_CHAT_ID   "Telegram chat id"                         "${TG_CHAT_ID:-}"
-  ask SERVER_NAME  "Server name"                              "${SERVER_NAME:-$(hostname)}"
-  ask INTERVAL     "Check interval in seconds"                "${INTERVAL:-300}"
-  ask DROP_PERCENT "Alert when traffic drops by (%)"          "${DROP_PERCENT:-50}"
-  ask MIN_PREV_MB  "Min traffic per interval to compare (MB)" "${MIN_PREV_MB:-20}"
-  ask COOLDOWN     "Seconds between repeated alerts"          "${COOLDOWN:-1800}"
+  # ask that ALLOWS empty value
+  ask_optional() {
+    local var="$1" prompt="$2" def="${3:-}" val
+    if [ -n "$def" ]; then
+      read -r -p "$prompt [$def]: " val < "$TTY" || true
+      val="${val:-$def}"
+    else
+      read -r -p "$prompt: " val < "$TTY" || true
+    fi
+    printf -v "$var" '%s' "$val"
+  }
 
-  # optional: force interface
+  echo "=== Traffic Monitor installer ==="
+  ask_required TG_TOKEN     "Telegram bot token"                       "${TG_TOKEN:-}"
+  ask_required TG_CHAT_ID   "Telegram chat id"                         "${TG_CHAT_ID:-}"
+  ask_required SERVER_NAME  "Server name"                              "${SERVER_NAME:-$(hostname)}"
+  ask_required INTERVAL     "Check interval in seconds"                "${INTERVAL:-300}"
+  ask_required DROP_PERCENT "Alert when traffic drops by (%)"          "${DROP_PERCENT:-50}"
+  ask_required MIN_PREV_MB  "Min traffic per interval to compare (MB)" "${MIN_PREV_MB:-20}"
+  ask_required COOLDOWN     "Seconds between repeated alerts"          "${COOLDOWN:-1800}"
+
   echo
   echo "Network interface (leave empty for auto-detect):"
   echo "  Common names: eth0, ens3, net0, enp0s3 ..."
-  ask IFACE        "Interface name (empty = auto)"            "${IFACE:-}"
+  ask_optional IFACE        "Interface name (empty = auto)"            "${IFACE:-}"
 
   # validate bot token
   if ! curl -fsS --max-time 15 "https://api.telegram.org/bot${TG_TOKEN}/getMe" >/dev/null; then
@@ -150,6 +223,11 @@ cmd_install() {
   mkdir -p "$INSTALL_DIR"
   curl -fsSL "$REPO_RAW/monitor.py" -o "$INSTALL_DIR/monitor.py"
   chmod +x "$INSTALL_DIR/monitor.py"
+
+  # also install this script itself so "tm" command works offline
+  curl -fsSL "$REPO_RAW/install.sh" -o "$INSTALL_DIR/install.sh"
+  chmod +x "$INSTALL_DIR/install.sh"
+  ln -sf "$INSTALL_DIR/install.sh" "$BIN_LINK"
 
   cat > "$ENV_FILE" << EOF
 TG_TOKEN="$TG_TOKEN"
@@ -196,11 +274,13 @@ EOF
   fi
 
   echo
-  echo "Done."
-  echo "  Logs:    journalctl -u $SERVICE -f"
-  echo "  Status:  systemctl status $SERVICE"
-  echo "  Edit:    sudo bash $0 edit"
-  echo "  Restart: sudo bash $0 restart"
+  echo "✅ Done."
+  echo
+  echo "  Management menu:  sudo tm"
+  echo "  Live logs:        sudo tm logs"
+  echo "  Status:           sudo tm status"
+  echo "  Edit config:      sudo tm edit"
+  echo "  Uninstall:        sudo tm uninstall"
 }
 
 # ---------- main ----------
@@ -209,12 +289,22 @@ case "${1:-}" in
   stop)       cmd_stop ;;
   restart)    cmd_restart ;;
   status)     cmd_status ;;
+  logs)       cmd_logs ;;
   edit)       cmd_edit ;;
   uninstall|--uninstall)
               cmd_uninstall ;;
+  menu)       cmd_menu ;;
+  install)    cmd_install ;;
   help|-h|--help)
               usage ;;
-  "")         cmd_install ;;
+  "")
+              # if already installed → open menu, otherwise install
+              if [ -f "$SERVICE_FILE" ] || [ -f "$ENV_FILE" ]; then
+                cmd_menu
+              else
+                cmd_install
+              fi
+              ;;
   *)
               echo "Unknown command: $1"
               usage
