@@ -18,7 +18,7 @@ need_root() {
 
 usage() {
   cat << EOF
-Usage: tm [command]   or   bash install.sh [command]
+Usage: tm [command] [options]
 
 Commands:
   (no args) / menu   Interactive management menu
@@ -28,15 +28,34 @@ Commands:
   restart            Restart the service
   status             Show status + last logs
   logs               Follow live logs
-  edit               Edit config (/etc/traffic-monitor.env)
+  edit               Edit config
   uninstall          Remove everything
   help               Show this help
 
+Install options (can be passed with install):
+  --token TOKEN          Telegram bot token
+  --chat-id ID           Telegram chat id
+  --name NAME            Server name
+  --interval SECONDS     Check interval (default 300)
+  --drop PERCENT         Drop percent to alert (default 50)
+  --min-mb MB            Min traffic to compare (default 20)
+  --cooldown SECONDS     Cooldown between alerts (default 1800)
+  --iface NAME           Network interface (empty = auto)
+
 Examples:
-  curl -fsSL .../install.sh | sudo bash          # first install
-  sudo tm                                        # open menu
-  sudo tm start
+  # Interactive install
+  curl -fsSL .../install.sh | sudo bash
+
+  # Non-interactive install (token + chat-id required)
+  curl -fsSL .../install.sh | sudo bash -s -- install \\
+    --token "123456:ABC-DEF" \\
+    --chat-id "97313299" \\
+    --name "sweden1"
+
+  # After install
+  sudo tm                  # open menu
   sudo tm logs
+  sudo tm restart
 EOF
 }
 
@@ -150,6 +169,35 @@ cmd_menu() {
   done
 }
 
+# parse install flags into variables
+parse_install_args() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --token)
+        TG_TOKEN="$2"; shift 2 ;;
+      --chat-id|--chatid)
+        TG_CHAT_ID="$2"; shift 2 ;;
+      --name|--server)
+        SERVER_NAME="$2"; shift 2 ;;
+      --interval)
+        INTERVAL="$2"; shift 2 ;;
+      --drop|--drop-percent)
+        DROP_PERCENT="$2"; shift 2 ;;
+      --min-mb|--min-prev-mb)
+        MIN_PREV_MB="$2"; shift 2 ;;
+      --cooldown)
+        COOLDOWN="$2"; shift 2 ;;
+      --iface|--interface)
+        IFACE="$2"; shift 2 ;;
+      *)
+        echo "Unknown option: $1"
+        usage
+        exit 1
+        ;;
+    esac
+  done
+}
+
 cmd_install() {
   need_root
 
@@ -168,11 +216,19 @@ cmd_install() {
     set +a
   fi
 
+  # parse any CLI flags passed after "install"
+  parse_install_args "$@"
+
   if [ -t 0 ]; then TTY=/dev/stdin; else TTY=/dev/tty; fi
 
-  # ask that REQUIRES a value
+  # ask that REQUIRES a value (only if not already set via flag/env)
   ask_required() {
     local var="$1" prompt="$2" def="${3:-}" val
+    # if already has value → skip asking
+    eval "local current=\${$var:-}"
+    if [ -n "$current" ]; then
+      return 0
+    fi
     while true; do
       if [ -n "$def" ]; then
         read -r -p "$prompt [$def]: " val < "$TTY" || true
@@ -191,6 +247,14 @@ cmd_install() {
   # ask that ALLOWS empty value
   ask_optional() {
     local var="$1" prompt="$2" def="${3:-}" val
+    eval "local current=\${$var:-}"
+    if [ -n "${current+x}" ] && [ -n "$current" ]; then
+      return 0
+    fi
+    # even if empty string was explicitly set via --iface "", respect it
+    if [ -n "${current+x}" ]; then
+      return 0
+    fi
     if [ -n "$def" ]; then
       read -r -p "$prompt [$def]: " val < "$TTY" || true
       val="${val:-$def}"
@@ -201,6 +265,8 @@ cmd_install() {
   }
 
   echo "=== Traffic Monitor installer ==="
+
+  # Required
   ask_required TG_TOKEN     "Telegram bot token"                       "${TG_TOKEN:-}"
   ask_required TG_CHAT_ID   "Telegram chat id"                         "${TG_CHAT_ID:-}"
   ask_required SERVER_NAME  "Server name"                              "${SERVER_NAME:-$(hostname)}"
@@ -209,10 +275,21 @@ cmd_install() {
   ask_required MIN_PREV_MB  "Min traffic per interval to compare (MB)" "${MIN_PREV_MB:-20}"
   ask_required COOLDOWN     "Seconds between repeated alerts"          "${COOLDOWN:-1800}"
 
+  # Optional interface
   echo
   echo "Network interface (leave empty for auto-detect):"
   echo "  Common names: eth0, ens3, net0, enp0s3 ..."
-  ask_optional IFACE        "Interface name (empty = auto)"            "${IFACE:-}"
+  # special handling: if IFACE was never set, allow empty
+  if [ -z "${IFACE+x}" ]; then
+    ask_optional IFACE "Interface name (empty = auto)" ""
+  fi
+
+  # final safety defaults
+  INTERVAL="${INTERVAL:-300}"
+  DROP_PERCENT="${DROP_PERCENT:-50}"
+  MIN_PREV_MB="${MIN_PREV_MB:-20}"
+  COOLDOWN="${COOLDOWN:-1800}"
+  IFACE="${IFACE:-}"
 
   # validate bot token
   if ! curl -fsS --max-time 15 "https://api.telegram.org/bot${TG_TOKEN}/getMe" >/dev/null; then
@@ -224,7 +301,7 @@ cmd_install() {
   curl -fsSL "$REPO_RAW/monitor.py" -o "$INSTALL_DIR/monitor.py"
   chmod +x "$INSTALL_DIR/monitor.py"
 
-  # also install this script itself so "tm" command works offline
+  # install this script itself so "tm" command works offline
   curl -fsSL "$REPO_RAW/install.sh" -o "$INSTALL_DIR/install.sh"
   chmod +x "$INSTALL_DIR/install.sh"
   ln -sf "$INSTALL_DIR/install.sh" "$BIN_LINK"
@@ -284,7 +361,11 @@ EOF
 }
 
 # ---------- main ----------
-case "${1:-}" in
+# Collect remaining args after the command
+CMD="${1:-}"
+shift || true
+
+case "$CMD" in
   start)      cmd_start ;;
   stop)       cmd_stop ;;
   restart)    cmd_restart ;;
@@ -294,7 +375,8 @@ case "${1:-}" in
   uninstall|--uninstall)
               cmd_uninstall ;;
   menu)       cmd_menu ;;
-  install)    cmd_install ;;
+  install)
+              cmd_install "$@" ;;
   help|-h|--help)
               usage ;;
   "")
@@ -305,8 +387,12 @@ case "${1:-}" in
                 cmd_install
               fi
               ;;
+  # also allow flags directly as first args (treat as install)
+  --token|--chat-id|--chatid|--name|--server|--interval|--drop|--min-mb|--cooldown|--iface|--interface)
+              cmd_install "$CMD" "$@"
+              ;;
   *)
-              echo "Unknown command: $1"
+              echo "Unknown command: $CMD"
               usage
               exit 1
               ;;
